@@ -1,19 +1,27 @@
 mod utils;
 
-use std::{ffi::CString, ptr};
+use std::{ffi::{CString, c_void}, ptr};
 
 use ash::vk;
 
 use winit::{event::{ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent}, event_loop::{ControlFlow, EventLoop}, window::Window};
 
 use utils::platform::required_extension_names;
+use utils::debug::{setup_debug_utils, ValidationInfo, populate_debug_messenger_create_info};
 
 const WINDOW_NAME: &'static str = "Vulkan Tutorial";
 
 struct VulkanApp {
     _entry: ash::Entry,
     instance: ash::Instance,
+    debug_utils_loader: ash::extensions::ext::DebugUtils,
+    debug_messenger: vk::DebugUtilsMessengerEXT,
 }
+
+const VALIDATION: ValidationInfo = ValidationInfo {
+    enabled: true,
+    required_validation_layers: ["VK_LAYER_KHRONOS_validation"],
+};
 
 trait WindowedApp {
     fn init_window(event_loop: &EventLoop<()>) -> winit::window::Window;
@@ -49,10 +57,13 @@ impl VulkanApp {
     pub fn new() -> VulkanApp {
         let entry = unsafe { ash::Entry::new() }.unwrap();
         let instance = VulkanApp::create_instance(&entry);
+        let (debug_utils_loader, debug_messenger) = setup_debug_utils(VALIDATION.enabled, &entry, &instance);
         
         VulkanApp {
             _entry: entry,
-            instance: instance
+            instance: instance,
+            debug_utils_loader: debug_utils_loader,
+            debug_messenger: debug_messenger
         }
     }
 
@@ -73,17 +84,41 @@ impl VulkanApp {
             api_version: vk::make_api_version(0, 1, 0, 0)
         };
 
+        let debug_utils_create_info = populate_debug_messenger_create_info();
         let extension_names = required_extension_names();
+
+        let required_validation_layer_raw_names: Vec<CString> = VALIDATION
+            .required_validation_layers
+            .iter()
+            .map(|layer_name| CString::new(*layer_name).unwrap())
+            .collect();
+        
+        let enable_layer_names: Vec<*const i8> = required_validation_layer_raw_names
+            .iter()
+            .map(|name| name.as_ptr())
+            .collect();
 
         let create_info = ash::vk::InstanceCreateInfo {
             s_type: ash::vk::StructureType::INSTANCE_CREATE_INFO,
-            p_next: ptr::null(),
+            p_next: if VALIDATION.enabled {
+                &debug_utils_create_info as *const vk::DebugUtilsMessengerCreateInfoEXT as *const c_void
+            } else {
+                ptr::null()
+            },
             flags: ash::vk::InstanceCreateFlags::empty(),
             p_application_info: &app_info,
             pp_enabled_extension_names: extension_names.as_ptr(),
             enabled_extension_count: extension_names.len() as u32,
-            enabled_layer_count: 0,
-            pp_enabled_layer_names: ptr::null(),
+            enabled_layer_count: if VALIDATION.enabled {
+                enable_layer_names.len()
+            } else {
+                0
+            } as u32,
+            pp_enabled_layer_names:  if VALIDATION.enabled {
+                enable_layer_names.as_ptr()
+            } else {
+                ptr::null()
+            },
         };
 
         let instance = unsafe {
@@ -121,6 +156,18 @@ impl VulkanApp {
                 _ => {}
             }
         })
+    }
+}
+
+impl Drop for VulkanApp {
+    fn drop(&mut self) {
+        unsafe {
+            if VALIDATION.enabled {
+                self.debug_utils_loader
+                    .destroy_debug_utils_messenger(self.debug_messenger, None);
+            }
+            self.instance.destroy_instance(None);
+        }
     }
 }
 
