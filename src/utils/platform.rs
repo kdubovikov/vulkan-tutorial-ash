@@ -7,6 +7,7 @@ use ash::extensions::mvk::MacOSSurface;
 
 use ash::extensions::ext::DebugUtils;
 use ash::extensions::khr::Surface;
+use ash::extensions::khr::GetPhysicalDeviceProperties2;
 
 #[cfg(target_os = "macos")]
 use cocoa::appkit::{NSView, NSWindow};
@@ -20,7 +21,8 @@ pub fn required_extension_names() -> Vec<*const i8> {
     vec![
         Surface::name().as_ptr(),
         MacOSSurface::name().as_ptr(),
-        DebugUtils::name().as_ptr()
+        DebugUtils::name().as_ptr(),
+        GetPhysicalDeviceProperties2::name().as_ptr()
     ]
 }
 

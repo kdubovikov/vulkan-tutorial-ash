@@ -29,6 +29,7 @@ struct VulkanApp {
     debug_utils_loader: ash::extensions::ext::DebugUtils,
     debug_messenger: vk::DebugUtilsMessengerEXT,
     _physical_device: vk::PhysicalDevice,
+    _device: ash::Device,
 }
 
 const VALIDATION: ValidationInfo = ValidationInfo {
@@ -104,8 +105,10 @@ impl LogicalDeviceFactory for VulkanApp {
             .map(|name| name.as_ptr())
             .collect();
 
+        let enabled_extension_raw_names: Vec<CString> = vec![CString::new("VK_KHR_portability_subset").unwrap()];
+        let enabled_extension_names: Vec<*const c_char> = enabled_extension_raw_names.iter().map(|name| name.as_ptr()).collect();
         let device_create_info = vk::DeviceCreateInfo {
-            s_type: vk::StructureType::DEVICE_QUEUE_CREATE_INFO,
+            s_type: vk::StructureType::DEVICE_CREATE_INFO,
             p_next: ptr::null(),
             flags: vk::DeviceCreateFlags::empty(),
             queue_create_info_count: 1,
@@ -120,8 +123,10 @@ impl LogicalDeviceFactory for VulkanApp {
             } else {
                 ptr::null()
             },
-            enabled_extension_count: 0,
-            pp_enabled_extension_names: ptr::null(),
+            enabled_extension_count: enabled_extension_names.len() as u32,
+            pp_enabled_extension_names: enabled_extension_names.as_ptr(),
+            // enabled_extension_count: 0,
+            // pp_enabled_extension_names: ptr::null(),
             p_enabled_features: &physical_device_features,
         };
         
@@ -277,13 +282,15 @@ impl VulkanApp {
         let instance = VulkanApp::create_instance(&entry);
         let (debug_utils_loader, debug_messenger) = setup_debug_utils(VALIDATION.enabled, &entry, &instance);
         let physical_device = VulkanApp::pick_physical_device(&instance);
+        let (device, family_indices) = VulkanApp::create_logical_device(&instance, &physical_device, &VALIDATION);
         
         VulkanApp {
             _entry: entry,
             instance: instance,
             debug_utils_loader: debug_utils_loader,
             debug_messenger: debug_messenger,
-            _physical_device: physical_device
+            _physical_device: physical_device,
+            _device: device
         }
     }
 
