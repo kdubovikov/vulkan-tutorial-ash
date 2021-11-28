@@ -69,6 +69,7 @@ struct VulkanApp {
     _swapchain_images: Vec<vk::Image>,
     _swapchain_format: vk::Format,
     _swapchain_extent: vk::Extent2D,
+    swapchain_imageview: Vec<vk::ImageView>,
 }
 
 const VALIDATION: ValidationInfo = ValidationInfo {
@@ -374,6 +375,8 @@ impl VulkanApp {
             &family_indices,
         );
 
+        let swapchain_imageview = VulkanApp::create_image_views(&device, swapchain_stuff.format, &swapchain_stuff.images);
+
         VulkanApp {
             _entry: entry,
             instance: instance,
@@ -390,6 +393,7 @@ impl VulkanApp {
             _swapchain_format: swapchain_stuff.format,
             _swapchain_images: swapchain_stuff.images,
             _swapchain_extent: swapchain_stuff.extent,
+            swapchain_imageview
         }
     }
 
@@ -588,6 +592,44 @@ impl VulkanApp {
         }
     }
 
+    fn create_image_views(device: &ash::Device, surface_format: vk::Format, images: &Vec<vk::Image>) -> Vec<vk::ImageView> {
+        let mut swapchain_imageviews = vec![];
+
+        for &image in images.iter() {
+            let imageview_create_info = vk::ImageViewCreateInfo {
+                s_type: vk::StructureType::IMAGE_VIEW_CREATE_INFO,
+                p_next: ptr::null(),
+                flags: vk::ImageViewCreateFlags::empty(),
+                view_type: vk::ImageViewType::TYPE_2D,
+                format: surface_format,
+                components: vk::ComponentMapping {
+                    r: vk::ComponentSwizzle::IDENTITY,
+                    g: vk::ComponentSwizzle::IDENTITY,
+                    b: vk::ComponentSwizzle::IDENTITY,
+                    a: vk::ComponentSwizzle::IDENTITY,
+                },
+                subresource_range: vk::ImageSubresourceRange { 
+                    aspect_mask: vk::ImageAspectFlags::COLOR, 
+                    base_mip_level: 0, 
+                    level_count: 1, 
+                    base_array_layer: 0, 
+                    layer_count: 1 
+                },
+                image
+            };
+
+            let imageview = unsafe {
+                device
+                    .create_image_view(&imageview_create_info, None)
+                    .expect("Failed to create Image View!")
+            };
+
+            swapchain_imageviews.push(imageview);
+        }
+
+        swapchain_imageviews
+    }
+
     fn draw_frame(&mut self) {
     }
 
@@ -620,6 +662,10 @@ impl VulkanApp {
 impl Drop for VulkanApp {
     fn drop(&mut self) {
         unsafe {
+            for &imageview in self.swapchain_imageview.iter() {
+                self._device.destroy_image_view(imageview, None);
+            }
+
             self.swapchain_loader.destroy_swapchain(self.swapchain, None);
             self._device.destroy_device(None);
             self.surface_loader.destroy_surface(self.surface, None);
