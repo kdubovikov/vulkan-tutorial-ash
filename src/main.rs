@@ -70,6 +70,7 @@ struct VulkanApp {
     _swapchain_format: vk::Format,
     _swapchain_extent: vk::Extent2D,
     swapchain_imageview: Vec<vk::ImageView>,
+    swapchain_framebuffers: Vec<vk::Framebuffer>,
     render_pass: vk::RenderPass,
     pipeline_layout: vk::PipelineLayout
 }
@@ -380,6 +381,7 @@ impl VulkanApp {
         let swapchain_imageview = VulkanApp::create_image_views(&device, swapchain_stuff.format, &swapchain_stuff.images);
         let render_pass = VulkanApp::create_render_pass(&device, swapchain_stuff.format);
         let (graphics_pipeline, pipeline_layout ) = VulkanApp::create_graphics_pipeline(&device, swapchain_stuff.extent, render_pass);
+        let swapchain_framebuffers = VulkanApp::create_framebuffers(&device, render_pass, &swapchain_imageview, swapchain_stuff.extent);
 
         VulkanApp {
             _entry: entry,
@@ -398,6 +400,7 @@ impl VulkanApp {
             _swapchain_images: swapchain_stuff.images,
             _swapchain_extent: swapchain_stuff.extent,
             swapchain_imageview,
+            swapchain_framebuffers,
             pipeline_layout,
             render_pass
         }
@@ -837,6 +840,36 @@ impl VulkanApp {
         (graphics_pipelines[0], pipeline_layout)
     }
 
+    fn create_framebuffers(device: &ash::Device, render_pass: vk::RenderPass, image_views: &Vec<vk::ImageView>, swapchain_extent: vk::Extent2D) -> Vec<vk::Framebuffer> {
+        let mut framebuffers = vec![];
+
+        for &image_view in image_views.iter() {
+            let attachments = [image_view];
+            
+            let framebuffer_create_info = vk::FramebufferCreateInfo {
+                s_type: vk::StructureType::FRAMEBUFFER_CREATE_INFO,
+                p_next: ptr::null(),
+                flags: vk::FramebufferCreateFlags::empty(),
+                render_pass,
+                attachment_count: attachments.len() as u32,
+                p_attachments: attachments.as_ptr(),
+                width: swapchain_extent.width ,
+                height: swapchain_extent.height,
+                layers: 1,
+            };
+
+            let framebuffer = unsafe {
+                device
+                    .create_framebuffer(&framebuffer_create_info, None)
+                    .expect("Failed to create Framebuffer!")
+            };
+
+            framebuffers.push(framebuffer);
+        }
+
+        framebuffers
+    }
+
     fn create_render_pass(device: &ash::Device, surface_format: vk::Format) -> vk::RenderPass {
         let color_attachment = vk::AttachmentDescription {
             flags: vk::AttachmentDescriptionFlags::empty(),
@@ -945,6 +978,10 @@ impl VulkanApp {
 impl Drop for VulkanApp {
     fn drop(&mut self) {
         unsafe {
+            for &framebuffer in self.swapchain_framebuffers.iter() {
+                self._device.destroy_framebuffer(framebuffer, None);
+            }
+
             self._device
                 .destroy_pipeline_layout(self.pipeline_layout, None);
 
