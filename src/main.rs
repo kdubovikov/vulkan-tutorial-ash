@@ -72,7 +72,9 @@ struct VulkanApp {
     swapchain_imageview: Vec<vk::ImageView>,
     swapchain_framebuffers: Vec<vk::Framebuffer>,
     render_pass: vk::RenderPass,
-    pipeline_layout: vk::PipelineLayout
+    pipeline_layout: vk::PipelineLayout,
+    command_pool: vk::CommandPool,
+    command_buffers: Vec<vk::CommandBuffer>
 }
 
 const VALIDATION: ValidationInfo = ValidationInfo {
@@ -383,6 +385,9 @@ impl VulkanApp {
         let (graphics_pipeline, pipeline_layout ) = VulkanApp::create_graphics_pipeline(&device, swapchain_stuff.extent, render_pass);
         let swapchain_framebuffers = VulkanApp::create_framebuffers(&device, render_pass, &swapchain_imageview, swapchain_stuff.extent);
 
+        let command_pool = VulkanApp::create_command_pool(&device, &family_indices);
+        let command_buffers = VulkanApp::create_command_buffers(&device, command_pool, graphics_pipeline, &swapchain_framebuffers, render_pass, swapchain_stuff.extent);
+
         VulkanApp {
             _entry: entry,
             instance: instance,
@@ -402,7 +407,9 @@ impl VulkanApp {
             swapchain_imageview,
             swapchain_framebuffers,
             pipeline_layout,
-            render_pass
+            render_pass,
+            command_pool,
+            command_buffers
         }
     }
 
@@ -922,6 +929,90 @@ impl VulkanApp {
         }
     }
 
+    fn create_command_pool(device: &ash::Device, queue_families: &QueueFamilyIndices) -> vk::CommandPool {
+        let command_pool_create_info = vk::CommandPoolCreateInfo {
+            s_type: vk::StructureType::COMMAND_POOL_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::CommandPoolCreateFlags::empty(),
+            queue_family_index: queue_families.graphics_family.unwrap(),
+        };
+
+        unsafe {
+            device
+                .create_command_pool(&command_pool_create_info, None)
+                .expect("Failed to create Command Pool!")
+        }
+    }
+    
+    fn create_command_buffers(
+        device: &ash::Device, 
+        command_pool: vk::CommandPool, 
+        graphics_pipeline: vk::Pipeline, 
+        framebuffers: &Vec<vk::Framebuffer>,
+        render_pass: vk::RenderPass,
+        surface_extent: vk::Extent2D
+    ) -> Vec<vk::CommandBuffer> {
+        let command_buffer_allocate_info = vk::CommandBufferAllocateInfo {
+            s_type: vk::StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
+            p_next: ptr::null(),
+            command_pool,
+            level: vk::CommandBufferLevel::PRIMARY,
+            command_buffer_count: framebuffers.len() as u32,
+        };
+
+        let command_buffers = unsafe {
+            device
+                .allocate_command_buffers(&command_buffer_allocate_info)
+                .expect("Failed to allocate Command Buffers!")
+        };
+
+        for (i, &command_buffer) in command_buffers.iter().enumerate() {
+            let commmad_buffer_begin_info = vk::CommandBufferBeginInfo {
+                s_type: vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
+                p_next: ptr::null(),
+                flags: vk::CommandBufferUsageFlags::SIMULTANEOUS_USE,
+                p_inheritance_info: ptr::null()
+            };
+
+            unsafe {
+                device
+                    .begin_command_buffer(command_buffer, &commmad_buffer_begin_info)
+                    .expect("Failed to begin recording Command Buffer at beginning!");
+            }
+
+            let clear_values = [vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: [0.0, 0.0, 0.0, 1.0],
+                }
+            }];
+
+            let render_pass_begin_info = vk::RenderPassBeginInfo {
+                s_type: vk::StructureType::RENDER_PASS_BEGIN_INFO,
+                p_next: ptr::null(),
+                render_pass,
+                framebuffer: framebuffers[i],
+                render_area: vk::Rect2D {
+                    offset: vk::Offset2D { x: 0, y: 0 },
+                    extent: surface_extent,
+                },
+                clear_value_count: clear_values.len() as u32,
+                p_clear_values: clear_values.as_ptr(),
+            };
+
+            unsafe {
+                device.cmd_begin_render_pass(command_buffer, &render_pass_begin_info, vk::SubpassContents::INLINE);
+                device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, graphics_pipeline);
+                device.cmd_draw(command_buffer, 3, 1, 0, 0);
+                device.cmd_end_render_pass(command_buffer);
+                device
+                    .end_command_buffer(command_buffer)
+                    .expect("Failed to record Command Buffer at Ending!");
+            }
+        }
+
+        command_buffers
+    }
+
     fn create_shader_module(device: &ash::Device, code: Vec<u8>) -> vk::ShaderModule {
         let shader_module_create_info = vk::ShaderModuleCreateInfo {
             s_type: vk::StructureType::SHADER_MODULE_CREATE_INFO,
@@ -978,6 +1069,7 @@ impl VulkanApp {
 impl Drop for VulkanApp {
     fn drop(&mut self) {
         unsafe {
+            self._device.destroy_command_pool(self.command_pool, None);
             for &framebuffer in self.swapchain_framebuffers.iter() {
                 self._device.destroy_framebuffer(framebuffer, None);
             }
