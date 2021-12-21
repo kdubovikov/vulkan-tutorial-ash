@@ -15,6 +15,7 @@ use num::clamp;
 const WINDOW_NAME: &'static str = "Vulkan Tutorial";
 const WINDOW_WIDTH: u32 = 1024;
 const WINDOW_HEIGHT: u32 = 768;
+const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
 struct QueueFamilyIndices {
     graphics_family: Option<u32>,
@@ -53,6 +54,12 @@ struct SwapChainSupportDetail {
     present_modes: Vec<vk::PresentModeKHR>
 }
 
+struct SyncObjects {
+    image_available_semaphores: Vec<vk::Semaphore>,
+    render_finished_semaphores: Vec<vk::Semaphore>,
+    inflight_fences: Vec<vk::Fence>,
+}
+
 struct VulkanApp {
     _entry: ash::Entry,
     instance: ash::Instance,
@@ -74,7 +81,12 @@ struct VulkanApp {
     render_pass: vk::RenderPass,
     pipeline_layout: vk::PipelineLayout,
     command_pool: vk::CommandPool,
-    command_buffers: Vec<vk::CommandBuffer>
+    command_buffers: Vec<vk::CommandBuffer>,
+
+    image_available_semaphores: Vec<vk::Semaphore>,
+    render_finished_semaphores: Vec<vk::Semaphore>,
+    in_flight_fences: Vec<vk::Fence>,
+    current_frame: usize
 }
 
 const VALIDATION: ValidationInfo = ValidationInfo {
@@ -388,6 +400,8 @@ impl VulkanApp {
         let command_pool = VulkanApp::create_command_pool(&device, &family_indices);
         let command_buffers = VulkanApp::create_command_buffers(&device, command_pool, graphics_pipeline, &swapchain_framebuffers, render_pass, swapchain_stuff.extent);
 
+        let sync_objects = VulkanApp::create_sync_objects(&device);
+
         VulkanApp {
             _entry: entry,
             instance: instance,
@@ -409,7 +423,12 @@ impl VulkanApp {
             pipeline_layout,
             render_pass,
             command_pool,
-            command_buffers
+            command_buffers,
+
+            image_available_semaphores: sync_objects.image_available_semaphores,
+            render_finished_semaphores: sync_objects.render_finished_semaphores,
+            in_flight_fences: sync_objects.inflight_fences,
+            current_frame: 0
         }
     }
 
@@ -910,6 +929,16 @@ impl VulkanApp {
 
         let render_pass_attachments = [color_attachment];
 
+        let subpass_dependencies = [vk::SubpassDependency {
+            src_subpass: vk::SUBPASS_EXTERNAL,
+            dst_subpass: 0,
+            src_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            dst_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            src_access_mask: vk::AccessFlags::empty(),
+            dst_access_mask: vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+            dependency_flags: vk::DependencyFlags::empty(),
+        }];
+
         let render_pass_create_info = vk::RenderPassCreateInfo {
             s_type: vk::StructureType::RENDER_PASS_CREATE_INFO,
             flags: vk::RenderPassCreateFlags::empty(),
@@ -918,8 +947,8 @@ impl VulkanApp {
             p_attachments: render_pass_attachments.as_ptr(),
             subpass_count: 1,
             p_subpasses: &subpass_description,
-            dependency_count: 0,
-            p_dependencies: ptr::null()
+            dependency_count: subpass_dependencies.len() as u32,
+            p_dependencies: subpass_dependencies.as_ptr()
         };
 
         unsafe {
@@ -1013,6 +1042,46 @@ impl VulkanApp {
         command_buffers
     }
 
+    fn create_sync_objects(device: &ash::Device) -> SyncObjects {
+        let mut sync_objects = SyncObjects {
+            image_available_semaphores: vec![],
+            render_finished_semaphores: vec![],
+            inflight_fences: vec![],
+        };
+
+        let semaphore_create_info = vk::SemaphoreCreateInfo {
+            s_type: vk::StructureType::SEMAPHORE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::SemaphoreCreateFlags::empty(),
+        };
+
+        let fence_create_info = vk::FenceCreateInfo {
+            s_type: vk::StructureType::FENCE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::FenceCreateFlags::SIGNALED,
+        };
+
+        for i in 0..MAX_FRAMES_IN_FLIGHT {
+            unsafe {
+                let image_abailable_semaphore = device
+                    .create_semaphore(&semaphore_create_info, None)
+                    .expect("Failed to create Semaphore Object!");
+                let render_finished_semaphore = device
+                    .create_semaphore(&semaphore_create_info, None)
+                    .expect("Failed to create Semaphore Object!");
+                let inflight_fence = device
+                    .create_fence(&fence_create_info, None)
+                    .expect("Failed to create fence!");
+
+                sync_objects.image_available_semaphores.push(image_abailable_semaphore);
+                sync_objects.render_finished_semaphores.push(render_finished_semaphore);
+                sync_objects.inflight_fences.push(inflight_fence);
+            }
+        }
+
+        sync_objects
+    } 
+
     fn create_shader_module(device: &ash::Device, code: Vec<u8>) -> vk::ShaderModule {
         let shader_module_create_info = vk::ShaderModuleCreateInfo {
             s_type: vk::StructureType::SHADER_MODULE_CREATE_INFO,
@@ -1038,6 +1107,73 @@ impl VulkanApp {
     }
 
     fn draw_frame(&mut self) {
+        let wait_fences = [self.in_flight_fences[self.current_frame]];
+
+        let (image_index, _is_suboptimal) = unsafe {
+            self._device
+                .wait_for_fences(&wait_fences, true, std::u64::MAX)
+                .expect("Failed to wait for fence");
+
+            self.swapchain_loader
+                .acquire_next_image(
+                    self.swapchain,
+            std::u64::MAX, 
+            self.image_available_semaphores[self.current_frame], 
+                    vk::Fence::null()
+            )
+            .expect("Failed to acquire image")
+        };
+
+        let wait_semaphores = [self.image_available_semaphores[self.current_frame]];
+        let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
+        let signal_semaphores = [self.render_finished_semaphores[self.current_frame]];
+
+        let submit_infos = [vk::SubmitInfo {
+            s_type: vk::StructureType::SUBMIT_INFO,
+            p_next: ptr::null(),
+            wait_semaphore_count: wait_semaphores.len() as u32,
+            p_wait_semaphores: wait_semaphores.as_ptr(),
+            p_wait_dst_stage_mask: wait_stages.as_ptr(),
+            command_buffer_count: 1,
+            p_command_buffers: &self.command_buffers[image_index as usize],
+            signal_semaphore_count: signal_semaphores.len() as u32,
+            p_signal_semaphores: signal_semaphores.as_ptr(),
+        }];
+
+        unsafe {
+            self._device
+                .reset_fences(&wait_fences)
+                .expect("Failed to reset Fence!");
+            
+            self._device
+                .queue_submit(
+                    self.graphics_queue,
+                    &submit_infos,
+                    self.in_flight_fences[self.current_frame],
+            )
+            .expect("Failed to execute queue submit.");
+        }
+
+        let swapchains = [self.swapchain];
+
+        let present_info = vk::PresentInfoKHR {
+            s_type: vk::StructureType::PRESENT_INFO_KHR,
+            p_next: ptr::null(),
+            wait_semaphore_count: 1,
+            p_wait_semaphores: signal_semaphores.as_ptr(),
+            swapchain_count: 1,
+            p_swapchains: swapchains.as_ptr(),
+            p_image_indices: &image_index,
+            p_results: ptr::null_mut(),
+        };
+
+        unsafe {
+            self.swapchain_loader
+                .queue_present(self.present_queue, &present_info)
+                .expect("Failed to execute queue present.");
+        }
+
+        self.current_frame = (self.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
     }
 
     fn main_loop(mut self, event_loop: EventLoop<()>, window: Window) {
@@ -1069,6 +1205,12 @@ impl VulkanApp {
 impl Drop for VulkanApp {
     fn drop(&mut self) {
         unsafe {
+            for i in 0..MAX_FRAMES_IN_FLIGHT {
+                self._device.destroy_semaphore(self.render_finished_semaphores[i], None);
+                self._device.destroy_semaphore(self.image_available_semaphores[i], None);
+                self._device.destroy_fence(self.in_flight_fences[i], None);
+            }
+
             self._device.destroy_command_pool(self.command_pool, None);
             for &framebuffer in self.swapchain_framebuffers.iter() {
                 self._device.destroy_framebuffer(framebuffer, None);
