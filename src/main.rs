@@ -1274,7 +1274,6 @@ impl VulkanApp {
 
         self.current_frame = (self.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
     }
-
    
     fn main_loop(mut self, event_loop: EventLoop<()>) {
         event_loop.run(move |event, _, control_flow| {
@@ -1305,29 +1304,27 @@ impl VulkanApp {
 impl Drop for VulkanApp {
     fn drop(&mut self) {
         unsafe {
-            unsafe {
-                for i in 0..MAX_FRAMES_IN_FLIGHT {
-                    self.device
-                        .destroy_semaphore(self.image_available_semaphores[i], None);
-                    self.device
-                        .destroy_semaphore(self.render_finished_semaphores[i], None);
-                    self.device.destroy_fence(self.in_flight_fences[i], None);
-                }
-    
-                self.cleanup_swapchain();
-    
-                self.device.destroy_command_pool(self.command_pool, None);
-    
-                self.device.destroy_device(None);
-                self.surface_loader.destroy_surface(self.surface, None);
-    
-                if VALIDATION.enabled {
-                    self.debug_utils_loader
-                        .destroy_debug_utils_messenger(self.debug_messenger, None);
-                }
-
-                self.instance.destroy_instance(None);
+            for i in 0..MAX_FRAMES_IN_FLIGHT {
+                self.device
+                    .destroy_semaphore(self.image_available_semaphores[i], None);
+                self.device
+                    .destroy_semaphore(self.render_finished_semaphores[i], None);
+                self.device.destroy_fence(self.in_flight_fences[i], None);
             }
+
+            self.cleanup_swapchain();
+
+            self.device.destroy_command_pool(self.command_pool, None);
+
+            self.device.destroy_device(None);
+            self.surface_loader.destroy_surface(self.surface, None);
+
+            if VALIDATION.enabled {
+                self.debug_utils_loader
+                    .destroy_debug_utils_messenger(self.debug_messenger, None);
+            }
+
+            self.instance.destroy_instance(None);
         }
     }
 }
