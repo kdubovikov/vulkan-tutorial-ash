@@ -1326,6 +1326,7 @@ dependencies = [
  "env_logger",
  "image",
  "log",
+ "memoffset",
  "metal",
  "num",
  "objc",
