@@ -1,10 +1,13 @@
 mod utils;
+mod vertex;
 
 use std::{ffi::{CStr, CString, c_void}, fs::File, os::raw::c_char, path::Path, ptr, io::Read};
 
 use ash::{vk::{self, PresentModeKHR, SurfaceFormatKHR}, prelude::VkResult};
 
+use cgmath::{Matrix, Matrix4};
 use log::Log;
+use vertex::{Vertex, INDICES_DATA, VERTICES_DATA};
 use winit::{event::{ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent}, event_loop::{ControlFlow, EventLoop}, window::Window};
 
 use utils::platform::{create_surface, required_extension_names};
@@ -21,59 +24,13 @@ const WINDOW_HEIGHT: u32 = 768;
 const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
 #[repr(C)]
-#[derive(Debug, Clone)]
-struct Vertex {
-    pos: [f32; 2],
-    color: [f32; 3]
+#[derive(Debug, Clone, Copy)]
+struct UniformBufferObject {
+    model: Matrix4<f32>,
+    view: Matrix4<f32>,
+    proj: Matrix4<f32>
 }
 
-impl Vertex {
-    fn get_binding_descriptions() -> [vk::VertexInputBindingDescription; 1] {
-        [vk::VertexInputBindingDescription {
-            binding: 0,
-            stride: std::mem::size_of::<Self>() as u32,
-            input_rate: vk::VertexInputRate::VERTEX
-        }]
-    }
-
-    fn get_attribute_descriptions() -> [vk::VertexInputAttributeDescription; 2] {
-        [
-            vk::VertexInputAttributeDescription {
-                location: 0,
-                binding: 0,
-                format: vk::Format::R32G32_SFLOAT,
-                offset: offset_of!(Self, pos) as u32
-            },
-            vk::VertexInputAttributeDescription {
-                binding: 0,
-                location: 1,
-                format: vk::Format::R32G32B32_SFLOAT,
-                offset: offset_of!(Self, color) as u32,
-            },
-        ]
-    }
-}
-
-const VERTICES_DATA: [Vertex; 4] = [
-    Vertex {
-        pos: [-0.5, -0.5],
-        color: [1.0, 0.0, 0.0],
-    },
-    Vertex {
-        pos: [0.5, -0.5],
-        color: [0.0, 1.0, 0.0],
-    },
-    Vertex {
-        pos: [0.5, 0.5],
-        color: [0.0, 0.0, 1.0],
-    },
-    Vertex {
-        pos: [-0.5, 0.5],
-        color: [1.0, 1.0, 1.0],
-    },
-];
-
-const INDICES_DATA: [u32; 6] = [0, 1, 2, 2, 3, 0];
 struct QueueFamilyIndices {
     graphics_family: Option<u32>,
     present_family: Option<u32>,
@@ -136,6 +93,7 @@ struct VulkanApp {
     swapchain_imageview: Vec<vk::ImageView>,
     swapchain_framebuffers: Vec<vk::Framebuffer>,
     render_pass: vk::RenderPass,
+    ubo_layout: vk::DescriptorSetLayout,
     pipeline_layout: vk::PipelineLayout,
     graphics_pipeline: vk::Pipeline,
     command_pool: vk::CommandPool,
@@ -145,6 +103,9 @@ struct VulkanApp {
     vertex_buffer_memory: vk::DeviceMemory,
     index_buffer: vk::Buffer,
     index_buffer_memory: vk::DeviceMemory,
+    uniform_buffers: Vec<vk::Buffer>,
+    uniform_buffers_memory: Vec<vk::DeviceMemory>,
+
 
     image_available_semaphores: Vec<vk::Semaphore>,
     render_finished_semaphores: Vec<vk::Semaphore>,
@@ -706,6 +667,9 @@ impl VulkanApp {
             index_buffer
         );
 
+        let (uniform_buffers, uniform_buffers_memory) = VulkanApp::creaet_uniform_buffers(&instance, &device, physical_device, swapchain_stuff.images.len());
+        let ubo_layout = VulkanApp::create_descriptor_set_layout(&device);
+
         VulkanApp {
             entry,
             instance: instance,
@@ -725,13 +689,17 @@ impl VulkanApp {
             swapchain_imageview,
             swapchain_framebuffers,
             pipeline_layout,
+            ubo_layout,
             render_pass,
             command_pool,
             command_buffers,
+
             vertex_buffer,
             vertex_buffer_memory,
             index_buffer,
             index_buffer_memory,
+            uniform_buffers,
+            uniform_buffers_memory,
 
             image_available_semaphores: sync_objects.image_available_semaphores,
             render_finished_semaphores: sync_objects.render_finished_semaphores,
@@ -1513,6 +1481,56 @@ impl VulkanApp {
         panic!("Failed to find suitable memory type!")
     }
 
+    fn creaet_uniform_buffers(instance: &ash::Instance, device: &ash::Device, physical_device: vk::PhysicalDevice, swapchain_image_count: usize) -> (Vec<vk::Buffer>, Vec<vk::DeviceMemory>) {
+        let buffer_size = std::mem::size_of::<UniformBufferObject>();
+
+        let mem_properties = unsafe {
+            instance.get_physical_device_memory_properties(physical_device)
+        };
+
+        let mut uniform_buffers = vec![];
+        let mut uniform_buffers_memory = vec![];
+
+        for _ in 0..swapchain_image_count {
+            let (uniform_buffer, uniform_buffer_memory) = VulkanApp::create_buffer(
+                device,
+                buffer_size as u64,
+                vk::BufferUsageFlags::UNIFORM_BUFFER,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+                &mem_properties,
+            );
+
+            uniform_buffers.push(uniform_buffer);
+            uniform_buffers_memory.push(uniform_buffer_memory);
+        }
+
+        (uniform_buffers, uniform_buffers_memory)
+    }
+
+    fn create_descriptor_set_layout(device: &ash::Device) -> vk::DescriptorSetLayout {
+        let ubo_layout_bingings = [vk::DescriptorSetLayoutBinding {
+            binding: 0,
+            descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
+            descriptor_count: 1,
+            stage_flags: vk::ShaderStageFlags::VERTEX,
+            p_immutable_samplers: ptr::null(),
+        }];
+
+        let ubo_layout_create_info = vk::DescriptorSetLayoutCreateInfo {
+            s_type: vk::StructureType::DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::DescriptorSetLayoutCreateFlags::empty(),
+            binding_count: ubo_layout_bingings.len() as u32,
+            p_bindings: ubo_layout_bingings.as_ptr(),
+        };
+
+        unsafe {
+            device
+                .create_descriptor_set_layout(&ubo_layout_create_info, None)
+                .expect("Failed to create Descriptor Set Layout!")
+        }
+    }
+    
     fn draw_frame(&mut self) {
         let wait_fences = [self.in_flight_fences[self.current_frame]];
 
