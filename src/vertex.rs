@@ -5,7 +5,8 @@ use memoffset::offset_of;
 #[derive(Debug, Clone)]
 pub struct Vertex {
     pos: [f32; 2],
-    color: [f32; 3]
+    color: [f32; 3],
+    tex_coord: [f32; 2]
 }
 
 impl Vertex {
@@ -17,7 +18,7 @@ impl Vertex {
         }]
     }
 
-    pub fn get_attribute_descriptions() -> [vk::VertexInputAttributeDescription; 2] {
+    pub fn get_attribute_descriptions() -> [vk::VertexInputAttributeDescription; 3] {
         [
             vk::VertexInputAttributeDescription {
                 location: 0,
@@ -31,6 +32,12 @@ impl Vertex {
                 format: vk::Format::R32G32B32_SFLOAT,
                 offset: offset_of!(Self, color) as u32,
             },
+            vk::VertexInputAttributeDescription {
+                binding: 0,
+                location: 2,
+                format: vk::Format::R32G32_SFLOAT,
+                offset: offset_of!(Vertex, tex_coord) as u32,
+            },
         ]
     }
 }
@@ -39,18 +46,22 @@ pub const VERTICES_DATA: [Vertex; 4] = [
     Vertex {
         pos: [-0.5, -0.5],
         color: [1.0, 0.0, 0.0],
+        tex_coord: [1.0, 0.0],
     },
     Vertex {
         pos: [0.5, -0.5],
         color: [0.0, 1.0, 0.0],
+        tex_coord: [0.0, 0.0],
     },
     Vertex {
         pos: [0.5, 0.5],
         color: [0.0, 0.0, 1.0],
+        tex_coord: [0.0, 1.0],
     },
     Vertex {
         pos: [-0.5, 0.5],
         color: [1.0, 1.0, 1.0],
+        tex_coord: [1.0, 1.0],
     },
 ];
 
