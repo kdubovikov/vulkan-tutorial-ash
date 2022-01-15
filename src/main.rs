@@ -122,6 +122,7 @@ struct VulkanApp {
 
     texture_image: vk::Image,
     texture_image_memory: vk::DeviceMemory,
+    texture_sampler: vk::Sampler
 }
 
 const VALIDATION: ValidationInfo = ValidationInfo {
@@ -698,6 +699,8 @@ impl VulkanApp {
             &Path::new(TEXTURE_PATH),
         );
 
+        let texture_sampler = VulkanApp::create_texture_sampler(&device);
+
         VulkanApp {
             entry,
             instance: instance,
@@ -756,7 +759,8 @@ impl VulkanApp {
             descriptor_sets,
             descriptor_set_layout,
             texture_image,
-            texture_image_memory
+            texture_image_memory,
+            texture_sampler
         }
     }
 
@@ -1963,6 +1967,72 @@ impl VulkanApp {
         VulkanApp::end_single_time_command(device, command_pool, submit_queue, command_buffer);
     }
 
+    fn create_texture_image_view(device: &ash::Device, texture_image: vk::Image) -> vk::ImageView {
+        let texture_image_view =
+            VulkanApp::create_image_view(device, texture_image, vk::Format::R8G8B8A8_UNORM);
+        texture_image_view
+    }
+
+
+    fn create_image_view(device: &ash::Device, image: vk::Image, format: vk::Format) -> vk::ImageView {
+        let imageview_create_info = vk::ImageViewCreateInfo {
+            s_type: vk::StructureType::IMAGE_VIEW_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::ImageViewCreateFlags::empty(),
+            image,
+            view_type: vk::ImageViewType::TYPE_2D,
+            format,
+            components: vk::ComponentMapping {
+                r: vk::ComponentSwizzle::IDENTITY,
+                g: vk::ComponentSwizzle::IDENTITY,
+                b: vk::ComponentSwizzle::IDENTITY,
+                a: vk::ComponentSwizzle::IDENTITY,
+            },
+            subresource_range: vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            },
+        };
+
+        unsafe {
+            device
+                .create_image_view(&imageview_create_info, None)
+                .expect("Failed to create Image View!")
+        }
+    }
+
+    fn create_texture_sampler(device: &ash::Device) -> vk::Sampler {
+        let sampler_create_info = vk::SamplerCreateInfo {
+            s_type: vk::StructureType::SAMPLER_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::SamplerCreateFlags::empty(),
+            mag_filter: vk::Filter::LINEAR,
+            min_filter: vk::Filter::LINEAR,
+            mipmap_mode: vk::SamplerMipmapMode::LINEAR,
+            address_mode_u: vk::SamplerAddressMode::REPEAT,
+            address_mode_v: vk::SamplerAddressMode::REPEAT,
+            address_mode_w: vk::SamplerAddressMode::REPEAT,
+            mip_lod_bias: 0.0,
+            anisotropy_enable: vk::TRUE,
+            max_anisotropy: 16.0,
+            compare_enable: vk::FALSE,
+            compare_op: vk::CompareOp::ALWAYS,
+            min_lod: 0.0,
+            max_lod: 0.0,
+            border_color: vk::BorderColor::INT_OPAQUE_BLACK,
+            unnormalized_coordinates: vk::FALSE,
+        };
+
+        unsafe {
+            device
+                .create_sampler(&sampler_create_info, None)
+                .expect("Failed to create Sampler!")
+        }
+    }
+
     fn draw_frame(&mut self, delta_time:  f32) {
         let wait_fences = [self.in_flight_fences[self.current_frame]];
 
@@ -2115,6 +2185,7 @@ impl Drop for VulkanApp {
             self.device.destroy_buffer(self.vertex_buffer, None);
             self.device.free_memory(self.vertex_buffer_memory, None);
 
+            self.device.destroy_sampler(self.texture_sampler, None);
             self.device.destroy_image(self.texture_image, None);
             self.device.free_memory(self.texture_image_memory, None);
 
