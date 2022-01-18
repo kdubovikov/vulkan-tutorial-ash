@@ -8,7 +8,7 @@ use ash::{vk::{self, PresentModeKHR, SurfaceFormatKHR}, prelude::VkResult};
 use cgmath::{Matrix, Matrix4, SquareMatrix, Deg, Point3, Vector3};
 use image::GenericImageView;
 use log::Log;
-use vertex::{Vertex, INDICES_DATA, VERTICES_DATA};
+use vertex::{Vertex};
 use winit::{event::{ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent}, event_loop::{ControlFlow, EventLoop}, window::Window};
 
 use utils::platform::{create_surface, required_extension_names};
@@ -23,7 +23,9 @@ const WINDOW_NAME: &'static str = "Vulkan Tutorial";
 const WINDOW_WIDTH: u32 = 1024;
 const WINDOW_HEIGHT: u32 = 768;
 const MAX_FRAMES_IN_FLIGHT: usize = 2;
-const TEXTURE_PATH: &'static str = "assets/vulkan.png";
+
+const TEXTURE_PATH: &'static str = "assets/viking_room.png";
+const MODEL_PATH: &'static str = "assets/viking_room.obj";
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -127,6 +129,8 @@ struct VulkanApp {
     depth_image: vk::Image,
     depth_image_view: vk::ImageView,
     depth_image_memory: vk::DeviceMemory,
+
+    indices_count: u32
 }
 
 const VALIDATION: ValidationInfo = ValidationInfo {
@@ -552,7 +556,8 @@ impl SwapchainFactory for VulkanApp {
             self.vertex_buffer,
             self.index_buffer,
             self.pipeline_layout,
-            &self.descriptor_sets
+            &self.descriptor_sets,
+            self.indices_count
         );
     }
     
@@ -681,10 +686,15 @@ impl VulkanApp {
 
         let sync_objects = VulkanApp::create_sync_objects(&device);
 
-        let (vertex_buffer, vertex_buffer_memory) = VulkanApp::create_vertex_buffer(&instance, &device, physical_device, command_pool, graphics_queue);
-        let (index_buffer, index_buffer_memory) = VulkanApp::create_index_buffer(&instance, &device, physical_device, command_pool, graphics_queue);
+        let (vertices, indices) = VulkanApp::load_model(&Path::new(MODEL_PATH));
+        println!("Loaded model");
+        let (vertex_buffer, vertex_buffer_memory) = VulkanApp::create_vertex_buffer(&instance, &device, physical_device, command_pool, graphics_queue, &vertices);
+        println!("Created vertex buffer");
+        let (index_buffer, index_buffer_memory) = VulkanApp::create_index_buffer(&instance, &device, physical_device, command_pool, graphics_queue, &indices);
+        println!("Created index buffer");
 
         let texture_sampler = VulkanApp::create_texture_sampler(&device);
+        println!("Created sampler");
         let (texture_image, texture_image_memory) = VulkanApp::create_texture_image(
             &device,
             command_pool,
@@ -693,6 +703,7 @@ impl VulkanApp {
             &Path::new(TEXTURE_PATH),
         );
 
+        println!("Created texture");
         let texture_image_view = VulkanApp::create_texture_image_view(&device, texture_image, 1);
 
         let (uniform_buffers, uniform_buffers_memory) = VulkanApp::creaet_uniform_buffers(&instance, &device, physical_device, swapchain_stuff.images.len());
@@ -713,10 +724,11 @@ impl VulkanApp {
             vertex_buffer, 
             index_buffer,
             pipeline_layout,
-            &descriptor_sets
+            &descriptor_sets,
+            indices.len() as u32
         );
 
-
+        println!("Created all resources");
 
         VulkanApp {
             entry,
@@ -750,11 +762,11 @@ impl VulkanApp {
             uniform_buffers_memory,
 
             uniform_transform: UniformBufferObject {
-                model: Matrix4::from_angle_z(Deg(90.0)),
+                model: Matrix4::identity(),
                 view: Matrix4::look_at_rh(
                     Point3::new(2.0, 2.0, 2.0),
                     Point3::new(0.0, 0.0, 0.0),
-                    Vector3::new(0.0, 0.0, 1.0),
+                    Vector3::new(0.0, 0.0, -1.0),
                 ),
                 proj: {
                     let mut proj = cgmath::perspective(
@@ -786,8 +798,47 @@ impl VulkanApp {
 
             depth_image,
             depth_image_view,
-            depth_image_memory
+            depth_image_memory,
+
+            indices_count: indices.len() as u32
         }
+    }
+
+    fn load_model(path: &Path) -> (Vec<Vertex>, Vec<u32>) {
+        let model_obj = tobj::load_obj(path, &tobj::LoadOptions::default())
+            .expect("Failed to load model object!");
+        let mut vertices = vec![];
+        let mut indices = vec![];
+
+        let (models, _) = model_obj;
+
+        for model in models.iter() {
+            let mesh = &model.mesh;
+
+            if mesh.texcoords.len() == 0 {
+                panic!("Missing texture coordinate for the model.")
+            }
+
+            let total_vert_count = mesh.positions.len() / 3;
+
+            for i in 0..total_vert_count {
+                let vertex = Vertex {
+                    pos: [
+                        mesh.positions[i * 3],
+                        mesh.positions[i * 3 + 1],
+                        mesh.positions[i * 3 + 2]
+                    ],
+                    color: [1.0, 1.0, 1.0],
+                    tex_coord: [mesh.texcoords[i * 2], mesh.texcoords[i * 2 + 1]],
+                };
+
+                vertices.push(vertex);
+            }
+
+            indices = mesh.indices.clone();
+        }
+
+        (vertices, indices)
     }
 
     fn create_instance(entry: &ash::Entry) -> ash::Instance {
@@ -1006,9 +1057,9 @@ impl VulkanApp {
             s_type: vk::StructureType::PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
             p_next: ptr::null(),
             flags: vk::PipelineDepthStencilStateCreateFlags::empty(),
-            depth_test_enable: vk::FALSE,
-            depth_write_enable: vk::FALSE,
-            depth_compare_op: vk::CompareOp::LESS_OR_EQUAL,
+            depth_test_enable: vk::TRUE,
+            depth_write_enable: vk::TRUE,
+            depth_compare_op: vk::CompareOp::LESS,
             depth_bounds_test_enable: vk::FALSE,
             stencil_test_enable: vk::FALSE,
             front: stencil_state,
@@ -1242,7 +1293,8 @@ impl VulkanApp {
         vertex_buffer: vk::Buffer,
         index_buffer: vk::Buffer,
         pipeline_layout: vk::PipelineLayout,
-        descriptor_sets: &Vec<vk::DescriptorSet>
+        descriptor_sets: &Vec<vk::DescriptorSet>,
+        indices_count: u32
     ) -> Vec<vk::CommandBuffer> {
         let command_buffer_allocate_info = vk::CommandBufferAllocateInfo {
             s_type: vk::StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
@@ -1311,7 +1363,7 @@ impl VulkanApp {
                 device.cmd_bind_index_buffer(command_buffer, index_buffer, 0, vk::IndexType::UINT32);
                 device.cmd_bind_descriptor_sets(command_buffer, vk::PipelineBindPoint::GRAPHICS, pipeline_layout, 0, &descriptor_sets_to_bind, &[]);
 
-                device.cmd_draw_indexed(command_buffer, INDICES_DATA.len() as u32, 1, 0, 0, 0);
+                device.cmd_draw_indexed(command_buffer, indices_count, 1, 0, 0, 0);
                 device.cmd_end_render_pass(command_buffer);
                 device
                     .end_command_buffer(command_buffer)
@@ -1362,8 +1414,8 @@ impl VulkanApp {
         sync_objects
     } 
 
-    fn create_vertex_buffer(instance: &ash::Instance, device: &ash::Device, physical_device: vk::PhysicalDevice, command_pool: vk::CommandPool, submit_queue: vk::Queue) -> (vk::Buffer, vk::DeviceMemory) {
-        let buffer_size = std::mem::size_of_val(&VERTICES_DATA) as vk::DeviceSize;
+    fn create_vertex_buffer(instance: &ash::Instance, device: &ash::Device, physical_device: vk::PhysicalDevice, command_pool: vk::CommandPool, submit_queue: vk::Queue, vertices: &[Vertex]) -> (vk::Buffer, vk::DeviceMemory) {
+        let buffer_size = std::mem::size_of_val(vertices) as vk::DeviceSize;
 
         let mem_properties = unsafe {
             instance.get_physical_device_memory_properties(physical_device)
@@ -1382,7 +1434,7 @@ impl VulkanApp {
                 .map_memory(staging_buffer_memory, 0, buffer_size, vk::MemoryMapFlags::empty())
                 .expect("Failed to Map Memory") as *mut Vertex;
 
-            data_ptr.copy_from_nonoverlapping(VERTICES_DATA.as_ptr(), VERTICES_DATA.len());
+            data_ptr.copy_from_nonoverlapping(vertices.as_ptr(), vertices.len());
 
             device.unmap_memory(staging_buffer_memory);
         }
@@ -1412,8 +1464,8 @@ impl VulkanApp {
         (vertex_buffer, vertex_buffer_memory)
     }
 
-    fn create_index_buffer(instance: &ash::Instance, device: &ash::Device, physical_device: vk::PhysicalDevice, command_pool: vk::CommandPool, submit_queue: vk::Queue) -> (vk::Buffer, vk::DeviceMemory) {
-        let buffer_size = std::mem::size_of_val(&INDICES_DATA) as vk::DeviceSize;
+    fn create_index_buffer(instance: &ash::Instance, device: &ash::Device, physical_device: vk::PhysicalDevice, command_pool: vk::CommandPool, submit_queue: vk::Queue, indices: &[u32]) -> (vk::Buffer, vk::DeviceMemory) {
+        let buffer_size = std::mem::size_of_val(indices) as vk::DeviceSize;
 
         let mem_properties = unsafe {
             instance.get_physical_device_memory_properties(physical_device)
@@ -1432,7 +1484,7 @@ impl VulkanApp {
                 .map_memory(staging_buffer_memory, 0, buffer_size, vk::MemoryMapFlags::empty())
                 .expect("Failed to Map Memory") as *mut u32;
 
-            data_ptr.copy_from_nonoverlapping(INDICES_DATA.as_ptr(), INDICES_DATA.len());
+            data_ptr.copy_from_nonoverlapping(indices.as_ptr(), indices.len());
 
             device.unmap_memory(staging_buffer_memory);
         }
@@ -1686,9 +1738,9 @@ impl VulkanApp {
     }
 
     fn update_uniform_buffer(&mut self, current_image: usize, delta_time: f32) {
-        self.uniform_transform.model =
-            Matrix4::from_axis_angle(Vector3::new(0.0, 0.0, 1.0), Deg(90.0) * delta_time)
-                * self.uniform_transform.model;
+        // self.uniform_transform.model =
+        //     Matrix4::from_axis_angle(Vector3::new(0.0, 0.0, 1.0), Deg(90.0) * delta_time)
+        //         * self.uniform_transform.model;
 
         let ubos = [self.uniform_transform.clone()];
 
