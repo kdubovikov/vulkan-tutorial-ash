@@ -1,8 +1,8 @@
-use std::{fs::File, path::Path, ptr, io::Read};
+use std::{fs::File, path::Path, ptr, io::Read, sync::Arc};
 
 use ash::vk;
 
-pub fn create_shader_module(device: &ash::Device, code: Vec<u8>) -> vk::ShaderModule {
+pub fn create_shader_module(device: Arc<ash::Device>, code: Vec<u8>) -> vk::ShaderModule {
     let shader_module_create_info = vk::ShaderModuleCreateInfo {
         s_type: vk::StructureType::SHADER_MODULE_CREATE_INFO,
         p_next: ptr::null(),

@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 log = "0.4"
 env_logger = "0.9"
-ash = "0.33.3"
+ash = "0.35.1+1.2.203"
 ash-window = "0.7"
 cgmath = "0.18"
 image = "0.23"
@@ -16,6 +16,9 @@ tobj = "3.2"
 winit = "0.25"
 num = "0.4"
 memoffset = "0.6.4"
+#vk-mem = "0.2.2"
+# vk-mem = { git = "https://github.com/Chris--B/vk-mem-rs"  }
+gpu-allocator = "0.16.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 metal = "0.23.1"

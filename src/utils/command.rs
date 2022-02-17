@@ -1,9 +1,9 @@
-use std::ptr;
+use std::{ptr, sync::Arc};
 
 use ash::vk;
 
 
-pub fn begin_single_time_command(device: &ash::Device, command_pool: vk::CommandPool) -> vk::CommandBuffer {
+pub fn begin_single_time_command(device: Arc<ash::Device>, command_pool: vk::CommandPool) -> vk::CommandBuffer {
     let command_buffer_allocate_info = vk::CommandBufferAllocateInfo {
         s_type: vk::StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
         p_next: ptr::null(),
@@ -34,7 +34,7 @@ pub fn begin_single_time_command(device: &ash::Device, command_pool: vk::Command
     command_buffer
 }
 
-pub fn end_single_time_command(device: &ash::Device, command_pool: vk::CommandPool, submit_queue: vk::Queue, command_buffer: vk::CommandBuffer) {
+pub fn end_single_time_command(device: Arc<ash::Device>, command_pool: vk::CommandPool, submit_queue: vk::Queue, command_buffer: vk::CommandBuffer) {
     unsafe {
         device
             .end_command_buffer(command_buffer)

@@ -1,12 +1,13 @@
-use std::{path::Path, ptr};
+use std::{path::Path, ptr, sync::{Arc, Mutex}};
 
 use ash::vk;
 use image::GenericImageView;
 
-use crate::utils;
+use crate::utils::{self, buffer::{AllocatedBuffer}};
+use gpu_allocator::{vulkan::*, MemoryLocation};
 
 
-pub fn create_texture_image(device: &ash::Device, command_pool: vk::CommandPool, submit_queue: vk::Queue, device_memory_properties: &vk::PhysicalDeviceMemoryProperties, image_path: &Path) -> (vk::Image, vk::DeviceMemory, u32) {
+pub fn create_texture_image(allocator: Arc<Mutex<Allocator>>, allocation_name: &str, device: Arc<ash::Device>, command_pool: vk::CommandPool, submit_queue: vk::Queue, device_memory_properties: &vk::PhysicalDeviceMemoryProperties, image_path: &Path) -> (vk::Image, vk::DeviceMemory, u32) {
     let mut image_object = image::open(image_path).expect("Can not read texture image from file");
     image_object = image_object.flipv();
     let (width, height) = (image_object.width(), image_object.height());
@@ -27,36 +28,23 @@ pub fn create_texture_image(device: &ash::Device, command_pool: vk::CommandPool,
         | image::DynamicImage::ImageRgba8(_) => image_object.to_bytes(),
         _ => panic!("Unsupported image format")
     };
-
     if image_size <= 0 {
         panic!("Failed to load texture image!")
     }
 
-    let (staging_buffer, staging_buffer_memory) = utils::buffer::create_buffer(
-        device,
-        image_size,
-        vk::BufferUsageFlags::TRANSFER_SRC,
-        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        device_memory_properties,
+    let staging_buffer = AllocatedBuffer::create(
+        allocator,
+        &format!("{} staging buffer", allocation_name),
+        device.clone(), 
+        image_size, 
+        vk::BufferUsageFlags::TRANSFER_SRC, 
+        MemoryLocation::CpuToGpu, 
     );
 
-    unsafe {
-        let data_ptr = device
-            .map_memory(
-                staging_buffer_memory,
-                0,
-                image_size,
-                vk::MemoryMapFlags::empty(),
-            )
-            .expect("Failed to Map Memory") as *mut u8;
-
-        data_ptr.copy_from_nonoverlapping(image_data.as_ptr(), image_data.len());
-
-        device.unmap_memory(staging_buffer_memory);
-    }
+    staging_buffer.copy_data_from(&image_data, image_data.len());
 
     let (texture_image, texture_image_memory) = create_image(
-        device,
+        device.clone(),
         width,
         height,
         mip_levels,
@@ -70,22 +58,17 @@ pub fn create_texture_image(device: &ash::Device, command_pool: vk::CommandPool,
         device_memory_properties,
     );
 
-    transition_image_layout(device, command_pool, submit_queue, texture_image, vk::Format::R8G8B8A8_UNORM, vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL, mip_levels);
-    copy_buffer_to_image(device, command_pool, submit_queue, staging_buffer, texture_image, width, height);
+    transition_image_layout(device.clone(), command_pool, submit_queue, texture_image, vk::Format::R8G8B8A8_UNORM, vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL, mip_levels);
+    copy_buffer_to_image(device.clone(), command_pool, submit_queue, staging_buffer.buffer, texture_image, width, height);
     // VulkanApp::transition_image_layout(device, command_pool, submit_queue, texture_image, vk::Format::R8G8B8A8_UNORM, vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
     
-    generate_mipmaps(device, command_pool, submit_queue, texture_image, width, height, mip_levels);
-
-    unsafe {
-        device.destroy_buffer(staging_buffer, None);
-        device.free_memory(staging_buffer_memory, None);
-    }
+    generate_mipmaps(device.clone(), command_pool, submit_queue, texture_image, width, height, mip_levels);
 
     (texture_image, texture_image_memory, mip_levels)
 }
 
 pub fn create_image(
-    device: &ash::Device, 
+    device: Arc<ash::Device>, 
     width: u32, 
     height: u32,
     mip_levels: u32,
@@ -147,13 +130,13 @@ pub fn create_image(
     (texture_image, texture_image_memory)
 }
 
-pub fn create_texture_image_view(device: &ash::Device, texture_image: vk::Image, mip_levels: u32) -> vk::ImageView {
+pub fn create_texture_image_view(device: Arc<ash::Device>, texture_image: vk::Image, mip_levels: u32) -> vk::ImageView {
     let texture_image_view =
         create_image_view(device, texture_image, vk::Format::R8G8B8A8_UNORM, vk::ImageAspectFlags::COLOR, mip_levels);
     texture_image_view
 }
 
-pub fn create_image_views(device: &ash::Device, surface_format: vk::Format, images: &Vec<vk::Image>) -> Vec<vk::ImageView> {
+pub fn create_image_views(device: Arc<ash::Device>, surface_format: vk::Format, images: &Vec<vk::Image>) -> Vec<vk::ImageView> {
     let mut swapchain_imageviews = vec![];
 
     for &image in images.iter() {
@@ -191,7 +174,7 @@ pub fn create_image_views(device: &ash::Device, surface_format: vk::Format, imag
     swapchain_imageviews
 }
 
-pub fn create_image_view(device: &ash::Device, image: vk::Image, format: vk::Format, aspect_flags: vk::ImageAspectFlags, mip_levels: u32,) -> vk::ImageView {
+pub fn create_image_view(device: Arc<ash::Device>, image: vk::Image, format: vk::Format, aspect_flags: vk::ImageAspectFlags, mip_levels: u32,) -> vk::ImageView {
     let imageview_create_info = vk::ImageViewCreateInfo {
         s_type: vk::StructureType::IMAGE_VIEW_CREATE_INFO,
         p_next: ptr::null(),
@@ -256,8 +239,8 @@ pub fn get_max_usable_sample_count(instance: &ash::Instance, physcial_device: vk
     vk::SampleCountFlags::TYPE_1
 }
 
-pub fn generate_mipmaps(device: &ash::Device, command_pool: vk::CommandPool, submit_queue: vk::Queue, image: vk::Image, tex_width: u32, tex_height: u32, mip_levels: u32) {
-    let command_buffer = utils::command::begin_single_time_command(device, command_pool);
+pub fn generate_mipmaps(device: Arc<ash::Device>, command_pool: vk::CommandPool, submit_queue: vk::Queue, image: vk::Image, tex_width: u32, tex_height: u32, mip_levels: u32) {
+    let command_buffer = utils::command::begin_single_time_command(device.clone(), command_pool);
 
     let mut image_barrier = vk::ImageMemoryBarrier::builder()
         .image(image)
@@ -380,7 +363,7 @@ pub fn check_mipmap_support(instance: &ash::Instance, physcial_device: vk::Physi
     }
 }
 
-pub fn create_texture_sampler(device: &ash::Device, mip_levels: u32) -> vk::Sampler {
+pub fn create_texture_sampler(device: Arc<ash::Device>, mip_levels: u32) -> vk::Sampler {
     let sampler_create_info = vk::SamplerCreateInfo {
         s_type: vk::StructureType::SAMPLER_CREATE_INFO,
         p_next: ptr::null(),
@@ -410,8 +393,8 @@ pub fn create_texture_sampler(device: &ash::Device, mip_levels: u32) -> vk::Samp
 }
 
 
-pub fn transition_image_layout(device: &ash::Device, command_pool: vk::CommandPool, submit_queue: vk::Queue, image: vk::Image, format: vk::Format, old_layout: vk::ImageLayout, new_layout: vk::ImageLayout, mip_levels: u32) {
-        let command_buffer = utils::command::begin_single_time_command(device, command_pool);
+pub fn transition_image_layout(device: Arc<ash::Device>, command_pool: vk::CommandPool, submit_queue: vk::Queue, image: vk::Image, format: vk::Format, old_layout: vk::ImageLayout, new_layout: vk::ImageLayout, mip_levels: u32) {
+        let command_buffer = utils::command::begin_single_time_command(device.clone(), command_pool);
 
         let src_access_mask;
         let dst_access_mask;
@@ -467,8 +450,8 @@ pub fn transition_image_layout(device: &ash::Device, command_pool: vk::CommandPo
     utils::command::end_single_time_command(device, command_pool, submit_queue, command_buffer);
  }
 
-fn copy_buffer_to_image(device: &ash::Device, command_pool: vk::CommandPool, submit_queue: vk::Queue, buffer: vk::Buffer, image: vk::Image, width: u32, height: u32) {
-    let command_buffer = utils::command::begin_single_time_command(device, command_pool);
+fn copy_buffer_to_image(device: Arc<ash::Device>, command_pool: vk::CommandPool, submit_queue: vk::Queue, buffer: vk::Buffer, image: vk::Image, width: u32, height: u32) {
+    let command_buffer = utils::command::begin_single_time_command(device.clone(), command_pool);
 
     let buffer_image_regions = [vk::BufferImageCopy {
         buffer_offset: 0,
@@ -498,5 +481,5 @@ fn copy_buffer_to_image(device: &ash::Device, command_pool: vk::CommandPool, sub
         );
     }
 
-    utils::command::end_single_time_command(device, command_pool, submit_queue, command_buffer);
+    utils::command::end_single_time_command(device.clone(), command_pool, submit_queue, command_buffer);
 }

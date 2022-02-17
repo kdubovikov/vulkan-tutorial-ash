@@ -6,6 +6,7 @@ use ash::extensions::khr::XlibSurface;
 use ash::extensions::mvk::MacOSSurface;
 use ash::vk;
 use ash::extensions::ext::DebugUtils;
+use ash::extensions::khr::BufferDeviceAddress;
 use ash::extensions::khr::Surface;
 use ash::extensions::khr::GetPhysicalDeviceProperties2;
 
@@ -25,7 +26,8 @@ pub fn required_extension_names() -> Vec<*const i8> {
         Surface::name().as_ptr(),
         MacOSSurface::name().as_ptr(),
         DebugUtils::name().as_ptr(),
-        GetPhysicalDeviceProperties2::name().as_ptr()
+        GetPhysicalDeviceProperties2::name().as_ptr(),
+        // BufferDeviceAddress::name().as_ptr()
     ]
 }
 

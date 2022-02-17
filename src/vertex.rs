@@ -2,11 +2,17 @@ use ash::vk;
 use memoffset::offset_of;
 
 #[repr(C)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Vertex {
     pub pos: [f32; 3],
     pub color: [f32; 3],
     pub tex_coord: [f32; 2]
+}
+
+pub struct Mesh {
+    vertices: Vec<Vertex>,
+    vertex_buffer: vk::Buffer,
+    index_buffer: vk::Buffer
 }
 
 impl Vertex {
